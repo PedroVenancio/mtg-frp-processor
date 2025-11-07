@@ -268,4 +268,3 @@ For issues and questions:
 - Requires valid LSA SAF credentials. Register at [https://lsa-saf.eumetsat.int](https://lsa-saf.eumetsat.int).
 - Data is only available from January 1st, 2025 onwards.
 - Script automatically normalizes date formats (8 → 08, 5 → 05) for compatibility.
-```
