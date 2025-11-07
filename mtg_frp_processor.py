@@ -1,12 +1,16 @@
 import os
 import gzip
 import pandas as pd
-import subprocess
 from pathlib import Path
 import glob
 from datetime import datetime
 import argparse
 import sys
+import requests
+from io import BytesIO
+from base64 import b64encode
+import calendar
+from urllib.parse import urljoin
 
 def parse_bbox(bbox_str):
     """
@@ -53,6 +57,50 @@ def build_url(year, month=None, day=None):
     else:
         return f"{base_url}/{year}/"
 
+def generate_file_urls_for_period(year, month=None, day=None):
+    """
+    Generate all possible file URLs for a given period
+    """
+    base_pattern = "LSA-509_MTG_MTFRPPIXEL-ListProduct_MTG-FD_{timestamp}.csv.gz"
+    urls = []
+    
+    if day and month:
+        # For specific day: generate URLs for all hours and 10-minute intervals
+        for hour in range(24):
+            for minute in range(0, 60, 10):
+                timestamp = f"{year}{month}{day}{hour:02d}{minute:02d}"
+                filename = base_pattern.format(timestamp=timestamp)
+                url = urljoin(build_url(year, month, day), filename)
+                urls.append(url)
+    
+    elif month:
+        # For month: generate URLs for all days in the month
+        _, num_days = calendar.monthrange(int(year), int(month))
+        for day_num in range(1, num_days + 1):
+            day_str = f"{day_num:02d}"
+            for hour in range(24):
+                for minute in range(0, 60, 10):
+                    timestamp = f"{year}{month}{day_str}{hour:02d}{minute:02d}"
+                    filename = base_pattern.format(timestamp=timestamp)
+                    url = urljoin(build_url(year, month, day_str), filename)
+                    urls.append(url)
+    
+    else:
+        # For year: generate URLs for all months and days
+        for month_num in range(1, 13):
+            month_str = f"{month_num:02d}"
+            _, num_days = calendar.monthrange(int(year), month_num)
+            for day_num in range(1, num_days + 1):
+                day_str = f"{day_num:02d}"
+                for hour in range(24):
+                    for minute in range(0, 60, 10):
+                        timestamp = f"{year}{month_str}{day_str}{hour:02d}{minute:02d}"
+                        filename = base_pattern.format(timestamp=timestamp)
+                        url = urljoin(build_url(year, month_str, day_str), filename)
+                        urls.append(url)
+    
+    return urls
+
 def check_existing_download(base_dir, year, month=None, day=None):
     """
     Check if download directory exists and has data for the specified period
@@ -71,27 +119,31 @@ def check_existing_download(base_dir, year, month=None, day=None):
     gz_files = list(period_dir.rglob("*.gz"))
     return len(gz_files) > 0
 
-def download_data(year, month=None, day=None, username=None, password=None, base_dir="FRP_MTG"):
+def download_with_requests(url, username, password):
     """
-    Download MTFRPPixel data using wget for the specified period
+    Download file using requests (cross-platform)
+    """
+    try:
+        auth_header = f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"
+        headers = {'Authorization': auth_header}
+        
+        response = requests.get(url, headers=headers, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        return response.content
+        
+    except requests.exceptions.RequestException as e:
+        # Don't print error for 404 (file not found) - this is normal for generated URLs
+        if hasattr(e.response, 'status_code') and e.response.status_code == 404:
+            return None
+        print(f"Download failed for {url}: {e}")
+        return None
+
+def download_data_requests(year, month=None, day=None, username=None, password=None, base_dir="FRP_MTG"):
+    """
+    Download MTFRPPixel data using requests for the specified period
     """
     Path(base_dir).mkdir(exist_ok=True)
-    
-    url = build_url(year, month, day)
-    
-    cmd = [
-        'wget',
-        '-c',  # Continue partial downloads
-        '--no-check-certificate',
-        '-r',  # Recursive
-        '-np',  # No parent directories
-        '-nH',  # No host-prefixed directories
-        '--user=' + username,
-        '--password=' + password,
-        '-R', '*.html,*.tmp,*.nc',  # Reject temporary and NetCDF files
-        '-P', base_dir,  # Download to specified directory
-        url
-    ]
     
     # Build period string for logging
     period_str = f"{year}"
@@ -101,15 +153,151 @@ def download_data(year, month=None, day=None, username=None, password=None, base
         period_str += f"-{day}"
         
     print(f"Downloading data for {period_str}...")
-    print(f"URL: {url}")
     
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print("Download completed successfully!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Download failed: {e.stderr}")
+    # Generate all possible file URLs for the period
+    file_urls = generate_file_urls_for_period(year, month, day)
+    
+    if not file_urls:
+        print(f"No file URLs generated for the specified period.")
         return False
+    
+    print(f"Trying {len(file_urls)} potential URLs...")
+    
+    success_count = 0
+    for i, file_url in enumerate(file_urls):
+        filename = os.path.basename(file_url)
+        
+        # Determine local path based on URL structure
+        relative_path = file_url.replace("https://datalsasaf.lsasvcs.ipma.pt/PRODUCTS/", "")
+        local_path = Path(base_dir) / relative_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Skip if file already exists
+        if local_path.exists():
+            success_count += 1
+            if (i + 1) % 100 == 0:  # Print progress every 100 files
+                print(f"Checked {i + 1}/{len(file_urls)} URLs... Found {success_count} files so far")
+            continue
+        
+        content = download_with_requests(file_url, username, password)
+        if content is not None:
+            with open(local_path, 'wb') as f:
+                f.write(content)
+            success_count += 1
+        
+        if (i + 1) % 100 == 0:  # Print progress every 100 files
+            print(f"Processed {i + 1}/{len(file_urls)} URLs... Downloaded {success_count} files so far")
+    
+    print(f"Download completed! {success_count}/{len(file_urls)} files downloaded successfully.")
+    return success_count > 0
+
+def process_in_memory(year, month=None, day=None, username=None, password=None, 
+                     bbox_coords=None, output_filename=None):
+    """
+    Download and process data directly to memory without saving to disk
+    """
+    if bbox_coords is None:
+        bbox_coords = (36.87164804628416, -9.633111264309846, 42.24431922230131, -6.070242597727865)
+    
+    # Generate all possible file URLs for the period
+    urls = generate_file_urls_for_period(year, month, day)
+    
+    if not urls:
+        print("No URLs generated for the specified period.")
+        return None
+    
+    all_dataframes = []
+    processed_count = 0
+    total_records = 0
+    downloaded_count = 0
+    
+    lat_min, lon_min, lat_max, lon_max = bbox_coords
+    print(f"Downloading and processing directly to memory...")
+    print(f"Trying {len(urls)} potential URLs...")
+    print(f"Applying bounding box filter: {lat_min:.2f}°N to {lat_max:.2f}°N, {lon_min:.2f}°W to {lon_max:.2f}°W")
+    
+    for i, url in enumerate(urls):
+        if (i + 1) % 100 == 0:
+            print(f"Processed {i + 1}/{len(urls)} URLs... Found {downloaded_count} files with data so far")
+        
+        content = download_with_requests(url, username, password)
+        if content is None:
+            continue
+            
+        downloaded_count += 1
+            
+        try:
+            # Decompress and read directly to pandas
+            with gzip.GzipFile(fileobj=BytesIO(content)) as f:
+                df = pd.read_csv(f, low_memory=False)
+            
+            # Apply bounding box filter
+            df_filtered = filter_by_bbox(df, bbox_coords)
+            
+            if not df_filtered.empty:
+                df_filtered = df_filtered.copy()
+                df_filtered.loc[:, 'source_file'] = os.path.basename(url)
+                
+                # Extract date from filename
+                try:
+                    # Extract timestamp from filename: LSA-509_MTG_MTFRPPIXEL-ListProduct_MTG-FD_202508041200.csv.gz
+                    timestamp_str = url.split('_')[-1].split('.')[0]
+                    if len(timestamp_str) == 12:  # YYYYMMDDHHMM
+                        year_file = timestamp_str[:4]
+                        month_file = timestamp_str[4:6]
+                        day_file = timestamp_str[6:8]
+                        hour_file = timestamp_str[8:10]
+                        minute_file = timestamp_str[10:12]
+                        df_filtered.loc[:, 'acquisition_date'] = f"{year_file}-{month_file}-{day_file}"
+                        
+                        # Create acquisition_datetime from components
+                        acq_datetime = datetime(
+                            int(year_file), int(month_file), int(day_file),
+                            int(hour_file), int(minute_file)
+                        )
+                        df_filtered.loc[:, 'acquisition_datetime'] = acq_datetime
+                except Exception as e:
+                    print(f"Warning: Could not parse date from filename {url}: {e}")
+                    df_filtered.loc[:, 'acquisition_date'] = f"{year}-{month or '01'}-{day or '01'}"
+                
+                all_dataframes.append(df_filtered)
+                processed_count += 1
+                total_records += len(df_filtered)
+                
+                if downloaded_count % 10 == 0:
+                    print(f"  Downloaded {downloaded_count} files, found {total_records} records so far")
+        
+        except Exception as e:
+            print(f"Error processing {url}: {str(e)}")
+        
+        # Clear memory periodically
+        if (i + 1) % 50 == 0:
+            import gc
+            gc.collect()
+    
+    if not all_dataframes:
+        print("No data was successfully processed.")
+        return None
+    
+    print(f"Combining {len(all_dataframes)} filtered datasets...")
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    
+    print(f"Saving combined data to {output_filename}...")
+    combined_df.to_csv(output_filename, index=False)
+    
+    print(f"\nIn-memory processing complete!")
+    print(f"Total URLs tried: {len(urls)}")
+    print(f"Total files found: {downloaded_count}")
+    print(f"Total files with data: {processed_count}")
+    print(f"Total records after filtering: {len(combined_df)}")
+    
+    # Show datetime range if available
+    if 'acquisition_datetime' in combined_df.columns:
+        min_dt = combined_df['acquisition_datetime'].min()
+        max_dt = combined_df['acquisition_datetime'].max()
+        print(f"Datetime range: {min_dt} to {max_dt}")
+    
+    return output_filename
 
 def filter_by_bbox(df, bbox_coords):
     """
@@ -417,8 +605,42 @@ def main():
                        help='Skip download and process existing data in base_dir')
     parser.add_argument('--skip_geopackage', action='store_true',
                        help='Skip GeoPackage conversion, only create CSV')
+    parser.add_argument('--in_memory', action='store_true',
+                       help='Download directly to memory without saving files to disk')
     
     args = parser.parse_args()
+    
+    try:
+        year_int = int(args.year)
+        if year_int < 2025:
+            print(f"Error: MTG/MTFRPPixel data is only available from 2025 onwards. You specified {args.year}.")
+            print("Please use a year >= 2025.")
+            sys.exit(1)
+    except ValueError:
+        print(f"Error: Invalid year format '{args.year}'. Please use YYYY format.")
+        sys.exit(1)
+    
+    if args.month:
+        try:
+            month_int = int(args.month)
+            if not (1 <= month_int <= 12):
+                print(f"Error: Month must be between 1 and 12. You specified {args.month}.")
+                sys.exit(1)
+            args.month = f"{month_int:02d}"
+        except ValueError:
+            print(f"Error: Invalid month format '{args.month}'. Please use numeric format (1-12).")
+            sys.exit(1)
+    
+    if args.day:
+        try:
+            day_int = int(args.day)
+            if not (1 <= day_int <= 31):
+                print(f"Error: Day must be between 1 and 31. You specified {args.day}.")
+                sys.exit(1)
+            args.day = f"{day_int:02d}"
+        except ValueError:
+            print(f"Error: Invalid day format '{args.day}'. Please use numeric format (1-31).")
+            sys.exit(1)
     
     # Parse bounding box
     bbox_coords = parse_bbox(args.bbox)
@@ -447,12 +669,16 @@ def main():
     print(f"Base directory: {args.base_dir}")
     print(f"Output file: {output_filename}")
     print(f"Bounding box: {bbox_coords}")
+    print(f"In memory processing: {args.in_memory}")
     print("=" * 50)
     
-    # Step 1: Download data (unless skipped or already exists)
+    # Step 1: Download data (unless skipped or using in_memory)
     download_needed = True
     
-    if args.skip_download:
+    if args.in_memory:
+        print("Using in-memory processing (no files saved to disk)...")
+        download_needed = False
+    elif args.skip_download:
         print("Skipping download as requested...")
         download_needed = False
     elif check_existing_download(args.base_dir, args.year, args.month, args.day):
@@ -461,32 +687,37 @@ def main():
         print("If you want to re-download, use a different base_dir or delete the existing directory.")
     
     if download_needed:
-        print("Starting download...")
-        success = download_data(args.year, args.month, args.day, args.username, args.password, args.base_dir)
+        print("Starting download using requests...")
+        success = download_data_requests(args.year, args.month, args.day, args.username, args.password, args.base_dir)
         
         if not success:
             print("Download failed. Please check credentials and try again.")
             return
-    else:
+    elif not args.in_memory:
         print("Using existing data for processing...")
     
-    # Ask user for processing method (unless running in non-interactive mode)
-    if sys.stdout.isatty():  # Only ask if running in terminal
-        print("\nChoose processing method:")
-        print("1. Standard processing (faster, uses more RAM)")
-        print("2. Batch processing (slower, uses less RAM)")
-        choice = input("Enter choice (1 or 2, default 1): ").strip() or "1"
+    # Choose processing method
+    if args.in_memory:
+        print("Using in-memory processing...")
+        output_csv = process_in_memory(args.year, args.month, args.day, args.username, 
+                                      args.password, bbox_coords, output_filename)
     else:
-        choice = "1"  # Default to standard processing in non-interactive mode
-    
-    if choice == "2":
-        print("Using batch processing to save RAM...")
-        output_csv = process_in_batches(args.base_dir, args.year, args.month, args.day, bbox_coords, 
-                                       batch_size=10, output_filename=output_filename)
-    else:
-        print("Using standard processing...")
-        output_csv = decompress_and_aggregate(args.base_dir, args.year, args.month, args.day, 
-                                             bbox_coords, output_filename)
+        if sys.stdout.isatty():  # Only ask if running in terminal
+            print("\nChoose processing method:")
+            print("1. Standard processing (faster, uses more RAM)")
+            print("2. Batch processing (slower, uses less RAM)")
+            choice = input("Enter choice (1 or 2, default 1): ").strip() or "1"
+        else:
+            choice = "1"  # Default to standard processing in non-interactive mode
+        
+        if choice == "2":
+            print("Using batch processing to save RAM...")
+            output_csv = process_in_batches(args.base_dir, args.year, args.month, args.day, bbox_coords, 
+                                           batch_size=10, output_filename=output_filename)
+        else:
+            print("Using standard processing...")
+            output_csv = decompress_and_aggregate(args.base_dir, args.year, args.month, args.day, 
+                                                 bbox_coords, output_filename)
     
     if output_csv:
         # Check file size
@@ -517,6 +748,7 @@ def main():
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month}")
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month} --day {args.day}")
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --output_name my_custom_name")
+        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --in_memory")
 
 if __name__ == "__main__":
     main()
