@@ -2,6 +2,9 @@
 
 Python script for downloading, processing, and analyzing MTG (Meteosat Third Generation) fire detection data from LSA SAF (Land Surface Analysis Satellite Applications Facility).
 
+<img width="1450" height="851" alt="image" src="https://github.com/user-attachments/assets/2b9e6575-4459-43ed-9d6d-913d3e439d32" />
+
+
 ## 📋 Description
 
 This script automates the workflow with MTFRPPixel (Fire Radiative Power) data from the MTG satellite, from download to creating QGIS-ready files. It includes spatial filtering, format conversion, and efficient processing of large data volumes.
