@@ -258,13 +258,13 @@ For issues and questions:
 
 ## 📚 References
 
-- [LSA SAF Product Documentation](https://lsa-saf.eumetsat.int)
-- [MTG Mission Overview](https://www.eumetsat.int/mtg)
-- [QGIS Documentation](https://qgis.org)
+- [LSA SAF Product Documentation](https://lsa-saf.eumetsat.int/en/news/news/2025/10/01/release-of-mtg-fire-radiative-power-product-as-demonstration/)
+- [MTG Mission Overview](https://www.eumetsat.int/meteosat-third-generation)
+- [QGIS Documentation](https://qgis.org/resources/hub/)
 
 ---
 
 **Notes**: 
-- Requires valid LSA SAF credentials. Register at [https://lsa-saf.eumetsat.int](https://lsa-saf.eumetsat.int).
+- Requires valid LSA SAF credentials. Register at [https://lsa-saf.eumetsat.int](https://datalsasaf.lsasvcs.ipma.pt/).
 - Data is only available from January 1st, 2025 onwards.
 - Script automatically normalizes date formats (8 → 08, 5 → 05) for compatibility.
