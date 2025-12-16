@@ -386,30 +386,57 @@ def decompress_and_aggregate(base_dir, year, month=None, day=None, bbox_coords=N
     if bbox_coords is None:
         bbox_coords = (36.87164804628416, -9.633111264309846, 42.24431922230131, -6.070242597727865)
     
-    # Determine the search pattern based on the period
-    if day and month:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, month, day, "*.gz")
-    elif month:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, month, "*", "*.gz")
-    else:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, "*", "*", "*.gz")
-
-    gz_files = glob.glob(search_pattern)
+    # Use Path for cross-platform path handling
+    base_path = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE"
     
-    # If no files found, try recursive search as fallback
+    # Build the search path based on parameters
+    if year:
+        base_path = base_path / year
+        if month:
+            base_path = base_path / month
+            if day:
+                base_path = base_path / day
+    
+    print(f"Searching for files in: {base_path}")
+    
+    # Use rglob for recursive search - more reliable than glob
+    gz_files = list(base_path.rglob("*.gz"))
+    
+    # If no files found with rglob, try a broader search
     if not gz_files:
-        alt_pattern = os.path.join(base_dir, "**", "*.gz")
-        gz_files = glob.glob(alt_pattern, recursive=True)
-        # Filter for the correct period
-        if day and month:
-            gz_files = [f for f in gz_files if f"/{year}/{month}/{day}/" in f]
-        elif month:
-            gz_files = [f for f in gz_files if f"/{year}/{month}/" in f]
-        else:
-            gz_files = [f for f in gz_files if f"/{year}/" in f]
-
+        print(f"No files found in {base_path}. Trying broader search...")
+        
+        # Alternative: search in the entire base_dir structure
+        search_path = Path(base_dir)
+        gz_files = list(search_path.rglob("*.gz"))
+        
+        # Filter files by year, month, day if specified
+        filtered_files = []
+        for file_path in gz_files:
+            parts = file_path.parts
+            
+            # Check if the path contains the expected structure
+            # Look for NATIVE/year/month/day pattern in the path
+            path_str = str(file_path)
+            
+            # Build regex pattern to match the expected structure
+            if day and month:
+                pattern = f".*NATIVE.*{year}.*{month}.*{day}.*\\.gz$"
+            elif month:
+                pattern = f".*NATIVE.*{year}.*{month}.*\\.gz$"
+            else:
+                pattern = f".*NATIVE.*{year}.*\\.gz$"
+                
+            import re
+            if re.search(pattern, path_str, re.IGNORECASE):
+                filtered_files.append(file_path)
+        
+        gz_files = filtered_files
+    
     if not gz_files:
         print(f"No .gz files found for the specified period.")
+        print(f"Base directory: {base_dir}")
+        print(f"Year: {year}, Month: {month}, Day: {day}")
         return None
     
     print(f"Found {len(gz_files)} compressed files to process...")
@@ -500,29 +527,50 @@ def process_in_batches(base_dir, year, month=None, day=None, bbox_coords=None, b
     if bbox_coords is None:
         bbox_coords = (36.87164804628416, -9.633111264309846, 42.24431922230131, -6.070242597727865)
     
-    # Determine the search pattern based on the period
-    if day and month:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, month, day, "*.gz")
-    elif month:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, month, "*", "*.gz")
-    else:
-        search_pattern = os.path.join(base_dir, "PRODUCTS", "MTG", "MTFRPPixel", "NATIVE", year, "*", "*", "*.gz")
-
-    gz_files = glob.glob(search_pattern)
+    # Use Path for cross-platform path handling
+    base_path = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE"
     
-    # If no files found, try recursive search as fallback
+    # Build the search path based on parameters
+    if year:
+        base_path = base_path / year
+        if month:
+            base_path = base_path / month
+            if day:
+                base_path = base_path / day
+    
+    print(f"Searching for files in: {base_path}")
+    
+    # Use rglob for recursive search
+    gz_files = list(base_path.rglob("*.gz"))
+    
+    # If no files found with rglob, try a broader search
     if not gz_files:
-        alt_pattern = os.path.join(base_dir, "**", "*.gz")
-        gz_files = glob.glob(alt_pattern, recursive=True)
-        # Filter for the correct period
-        if day and month:
-            gz_files = [f for f in gz_files if f"/{year}/{month}/{day}/" in f]
-        elif month:
-            gz_files = [f for f in gz_files if f"/{year}/{month}/" in f]
-        else:
-            gz_files = [f for f in gz_files if f"/{year}/" in f]
+        print(f"No files found in {base_path}. Trying broader search...")
+        
+        search_path = Path(base_dir)
+        gz_files = list(search_path.rglob("*.gz"))
+        
+        # Filter files by year, month, day if specified
+        filtered_files = []
+        for file_path in gz_files:
+            parts = file_path.parts
+            path_str = str(file_path)
+            
+            import re
+            if day and month:
+                pattern = f".*NATIVE.*{year}.*{month}.*{day}.*\\.gz$"
+            elif month:
+                pattern = f".*NATIVE.*{year}.*{month}.*\\.gz$"
+            else:
+                pattern = f".*NATIVE.*{year}.*\\.gz$"
+                
+            if re.search(pattern, path_str, re.IGNORECASE):
+                filtered_files.append(file_path)
+        
+        gz_files = filtered_files
 
     if not gz_files:
+        print(f"No files found for the specified period.")
         return None
     
     # Create temp directory name based on period
@@ -745,8 +793,8 @@ def main():
         # Show usage examples
         print("\nUsage examples for next time:")
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year}")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month}")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month} --day {args.day}")
+        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month 07")
+        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month} --day 15")
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --output_name my_custom_name")
         print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --in_memory")
 
