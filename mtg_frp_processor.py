@@ -44,6 +44,86 @@ def parse_bbox(bbox_str):
         print("Please use format: lat_min,lon_min,lat_max,lon_max")
         sys.exit(1)
 
+def parse_range_list(spec, min_val, max_val, label="value"):
+    """
+    Parse a range/list specification into a sorted list of zero-padded 2-digit strings.
+    Accepts:
+      - a single value: "7" -> ["07"]
+      - a range: "26-28" -> ["26", "27", "28"]
+      - a comma-separated list: "26,27,31" -> ["26", "27", "31"]
+      - a mix: "1,3,5-7" -> ["01", "03", "05", "06", "07"]
+    """
+    if spec is None:
+        return None
+
+    values = set()
+    for part in spec.split(','):
+        part = part.strip()
+        if not part:
+            continue
+
+        if '-' in part:
+            bounds = part.split('-')
+            if len(bounds) != 2:
+                print(f"Error: invalid range '{part}' for {label}. Use a format like '26-28'.")
+                sys.exit(1)
+            try:
+                start, end = int(bounds[0]), int(bounds[1])
+            except ValueError:
+                print(f"Error: invalid range '{part}' for {label}. Bounds must be numeric.")
+                sys.exit(1)
+            if start > end:
+                print(f"Error: invalid range '{part}' for {label}. Start must be <= end.")
+                sys.exit(1)
+            values.update(range(start, end + 1))
+        else:
+            try:
+                values.add(int(part))
+            except ValueError:
+                print(f"Error: invalid {label} '{part}'. Must be numeric.")
+                sys.exit(1)
+
+    for v in values:
+        if not (min_val <= v <= max_val):
+            print(f"Error: {label} {v} is out of range ({min_val}-{max_val}).")
+            sys.exit(1)
+
+    return [f"{v:02d}" for v in sorted(values)]
+
+
+def combine_period_frames(frames, output_filename):
+    """
+    Combine per-period DataFrames (already collected from processing each
+    month/day individually) into a single output CSV.
+
+    Each period is searched/processed independently, so as a safety net
+    against the same source file being picked up by more than one period
+    (e.g. leftover data from earlier runs, or a broad directory scan),
+    exact-duplicate records are dropped before saving.
+    """
+    if not frames:
+        print("No data processed for any of the requested periods.")
+        return None
+
+    combined_df = pd.concat(frames, ignore_index=True)
+
+    # Prefer a natural key (same source file + same acquisition time + same
+    # pixel location) if those columns are present; fall back to full-row
+    # duplicates otherwise.
+    key_cols = [c for c in ['source_file', 'ACQTIME', 'LATITUDE', 'LONGITUDE'] if c in combined_df.columns]
+    dedup_subset = key_cols if key_cols else None
+
+    before = len(combined_df)
+    combined_df = combined_df.drop_duplicates(subset=dedup_subset, keep='first').reset_index(drop=True)
+    removed = before - len(combined_df)
+    if removed:
+        print(f"Removed {removed} duplicate record(s) found across periods.")
+
+    combined_df.to_csv(output_filename, index=False)
+    print(f"Combined {len(frames)} period(s) into {output_filename} ({len(combined_df)} total records).")
+    return output_filename
+
+
 def build_url(year, month=None, day=None):
     """
     Build the download URL based on the specified time period
@@ -105,12 +185,14 @@ def check_existing_download(base_dir, year, month=None, day=None):
     """
     Check if download directory exists and has data for the specified period
     """
+    # NOTE: matches the layout actually written by download_data_requests(),
+    # which strips the "PRODUCTS/" prefix from the remote URL before saving.
     if day and month:
-        period_dir = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE" / year / month / day
+        period_dir = Path(base_dir) / "MTG" / "MTFRPPixel" / "NATIVE" / year / month / day
     elif month:
-        period_dir = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE" / year / month
+        period_dir = Path(base_dir) / "MTG" / "MTFRPPixel" / "NATIVE" / year / month
     else:
-        period_dir = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE" / year
+        period_dir = Path(base_dir) / "MTG" / "MTFRPPixel" / "NATIVE" / year
 
     if not period_dir.exists():
         return False
@@ -386,8 +468,10 @@ def decompress_and_aggregate(base_dir, year, month=None, day=None, bbox_coords=N
     if bbox_coords is None:
         bbox_coords = (36.87164804628416, -9.633111264309846, 42.24431922230131, -6.070242597727865)
     
-    # Use Path for cross-platform path handling
-    base_path = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE"
+    # Use Path for cross-platform path handling.
+    # NOTE: matches the layout actually written by download_data_requests(),
+    # which strips the "PRODUCTS/" prefix from the remote URL before saving.
+    base_path = Path(base_dir) / "MTG" / "MTFRPPixel" / "NATIVE"
     
     # Build the search path based on parameters
     if year:
@@ -527,8 +611,10 @@ def process_in_batches(base_dir, year, month=None, day=None, bbox_coords=None, b
     if bbox_coords is None:
         bbox_coords = (36.87164804628416, -9.633111264309846, 42.24431922230131, -6.070242597727865)
     
-    # Use Path for cross-platform path handling
-    base_path = Path(base_dir) / "PRODUCTS" / "MTG" / "MTFRPPixel" / "NATIVE"
+    # Use Path for cross-platform path handling.
+    # NOTE: matches the layout actually written by download_data_requests(),
+    # which strips the "PRODUCTS/" prefix from the remote URL before saving.
+    base_path = Path(base_dir) / "MTG" / "MTFRPPixel" / "NATIVE"
     
     # Build the search path based on parameters
     if year:
@@ -643,8 +729,13 @@ def main():
     parser.add_argument('--year', required=True, help='Year in YYYY format')
     
     # Optional arguments
-    parser.add_argument('--month', required=False, help='Month in MM format')
-    parser.add_argument('--day', required=False, help='Day in DD format')
+    parser.add_argument('--month', required=False, help='Single month in MM format (use --months for a range/list)')
+    parser.add_argument('--months', required=False,
+                       help="Months as a range (e.g. '07-08') or list (e.g. '07,08,12'). Cannot be combined with --month.")
+    parser.add_argument('--day', required=False, help='Single day in DD format (use --days for a range/list)')
+    parser.add_argument('--days', required=False,
+                       help="Days as a range (e.g. '26-28') or list (e.g. '26,27,31'). Requires a single month "
+                            "(via --month or a one-value --months). Cannot be combined with --day.")
     parser.add_argument('--base_dir', default='FRP_MTG', help='Base directory for downloads (default: FRP_MTG)')
     parser.add_argument('--bbox', default='36.87164804628416,-9.633111264309846,42.24431922230131,-6.070242597727865',
                        help='Bounding box: lat_min,lon_min,lat_max,lon_max (default: Portugal bbox)')
@@ -663,6 +754,13 @@ def main():
     if not args.skip_download and (not args.username or not args.password):
         parser.error("--username and --password are required unless --skip_download is used.")
     
+    if args.month and args.months:
+        print("Error: use either --month or --months, not both.")
+        sys.exit(1)
+    if args.day and args.days:
+        print("Error: use either --day or --days, not both.")
+        sys.exit(1)
+    
     try:
         year_int = int(args.year)
         if year_int < 2025:
@@ -673,27 +771,59 @@ def main():
         print(f"Error: Invalid year format '{args.year}'. Please use YYYY format.")
         sys.exit(1)
     
-    if args.month:
+    # Build the list of months to process (None if no month/months given at all)
+    months_list = None
+    if args.months:
+        months_list = parse_range_list(args.months, 1, 12, label="month")
+    elif args.month:
         try:
             month_int = int(args.month)
             if not (1 <= month_int <= 12):
                 print(f"Error: Month must be between 1 and 12. You specified {args.month}.")
                 sys.exit(1)
-            args.month = f"{month_int:02d}"
+            months_list = [f"{month_int:02d}"]
         except ValueError:
             print(f"Error: Invalid month format '{args.month}'. Please use numeric format (1-12).")
             sys.exit(1)
     
-    if args.day:
+    # Build the list of days to process (None if no day/days given at all)
+    days_list = None
+    if args.days:
+        days_list = parse_range_list(args.days, 1, 31, label="day")
+    elif args.day:
         try:
             day_int = int(args.day)
             if not (1 <= day_int <= 31):
                 print(f"Error: Day must be between 1 and 31. You specified {args.day}.")
                 sys.exit(1)
-            args.day = f"{day_int:02d}"
+            days_list = [f"{day_int:02d}"]
         except ValueError:
             print(f"Error: Invalid day format '{args.day}'. Please use numeric format (1-31).")
             sys.exit(1)
+    
+    if days_list and not months_list:
+        print("Error: --day/--days requires --month or --months to also be specified.")
+        sys.exit(1)
+    if days_list and len(months_list) != 1:
+        print("Error: --day/--days requires exactly one month (use --month, or a single value with --months).")
+        sys.exit(1)
+    
+    # Validate each requested day actually exists in that month/year
+    if days_list:
+        _, num_days_in_month = calendar.monthrange(year_int, int(months_list[0]))
+        for d in days_list:
+            if int(d) > num_days_in_month:
+                print(f"Error: day {d} does not exist in {args.year}-{months_list[0]} "
+                      f"(that month has {num_days_in_month} days).")
+                sys.exit(1)
+    
+    # Build the list of (month, day) periods to process
+    if months_list is None:
+        periods = [(None, None)]
+    elif days_list is None:
+        periods = [(m, None) for m in months_list]
+    else:
+        periods = [(months_list[0], d) for d in days_list]
     
     # Parse bounding box
     bbox_coords = parse_bbox(args.bbox)
@@ -703,21 +833,24 @@ def main():
         base_output = args.output_name
     else:
         base_output = "MTG_MTFRPPixel_aggregated"
-        
-    if args.day and args.month:
-        output_filename = f"{base_output}_{args.year}_{args.month}_{args.day}.csv"
-    elif args.month:
-        output_filename = f"{base_output}_{args.year}_{args.month}.csv"
+    
+    if days_list:
+        day_part = days_list[0] if len(days_list) == 1 else f"{days_list[0]}-{days_list[-1]}"
+        output_filename = f"{base_output}_{args.year}_{months_list[0]}_{day_part}.csv"
+    elif months_list:
+        month_part = months_list[0] if len(months_list) == 1 else f"{months_list[0]}-{months_list[-1]}"
+        output_filename = f"{base_output}_{args.year}_{month_part}.csv"
     else:
         output_filename = f"{base_output}_{args.year}.csv"
     
     print("MTG/MTFRPPixel Data Processor")
     print("=" * 50)
-    period_str = f"{args.year}"
-    if args.month:
-        period_str += f"-{args.month}"
-    if args.day:
-        period_str += f"-{args.day}"
+    if days_list:
+        period_str = f"{args.year}-{months_list[0]}, days: {', '.join(days_list)}"
+    elif months_list:
+        period_str = f"{args.year}, months: {', '.join(months_list)}"
+    else:
+        period_str = f"{args.year}"
     print(f"Period: {period_str}")
     print(f"Base directory: {args.base_dir}")
     print(f"Output file: {output_filename}")
@@ -726,34 +859,44 @@ def main():
     print("=" * 50)
     
     # Step 1: Download data (unless skipped or using in_memory)
-    download_needed = True
-    
     if args.in_memory:
         print("Using in-memory processing (no files saved to disk)...")
-        download_needed = False
     elif args.skip_download:
         print("Skipping download as requested...")
-        download_needed = False
-    elif check_existing_download(args.base_dir, args.year, args.month, args.day):
-        print(f"Data already exists in {args.base_dir}. Skipping download.")
-        download_needed = False
-        print("If you want to re-download, use a different base_dir or delete the existing directory.")
-    
-    if download_needed:
-        print("Starting download using requests...")
-        success = download_data_requests(args.year, args.month, args.day, args.username, args.password, args.base_dir)
+    else:
+        periods_needing_download = [
+            (m, d) for (m, d) in periods
+            if not check_existing_download(args.base_dir, args.year, m, d)
+        ]
         
-        if not success:
-            print("Download failed. Please check credentials and try again.")
-            return
-    elif not args.in_memory:
-        print("Using existing data for processing...")
+        if not periods_needing_download:
+            print(f"Data already exists in {args.base_dir} for all requested periods. Skipping download.")
+            print("If you want to re-download, use a different base_dir or delete the existing directory.")
+        else:
+            print(f"Starting download using requests for {len(periods_needing_download)} period(s)...")
+            any_failed = False
+            for m, d in periods_needing_download:
+                label = f"{args.year}" + (f"-{m}" if m else "") + (f"-{d}" if d else "")
+                success = download_data_requests(args.year, m, d, args.username, args.password, args.base_dir)
+                if not success:
+                    any_failed = True
+                    print(f"Download failed for period {label}. Check credentials and connectivity.")
+            if any_failed:
+                print("Some periods failed to download; processing will continue with whatever data is available.")
     
-    # Choose processing method
+    # Step 2: Process each period, then combine into a single output file
+    period_frames = []
+    
     if args.in_memory:
         print("Using in-memory processing...")
-        output_csv = process_in_memory(args.year, args.month, args.day, args.username, 
-                                      args.password, bbox_coords, output_filename)
+        for m, d in periods:
+            label = f"{args.year}" + (f"-{m}" if m else "") + (f"-{d}" if d else "")
+            print(f"\n--- Processing period {label} ---")
+            temp_name = f".tmp_{Path(output_filename).stem}_{m or 'yr'}_{d or 'mo'}.csv"
+            result = process_in_memory(args.year, m, d, args.username, args.password, bbox_coords, temp_name)
+            if result:
+                period_frames.append(pd.read_csv(temp_name))
+                os.remove(temp_name)
     else:
         if sys.stdout.isatty():  # Only ask if running in terminal
             print("\nChoose processing method:")
@@ -763,14 +906,22 @@ def main():
         else:
             choice = "1"  # Default to standard processing in non-interactive mode
         
-        if choice == "2":
-            print("Using batch processing to save RAM...")
-            output_csv = process_in_batches(args.base_dir, args.year, args.month, args.day, bbox_coords, 
-                                           batch_size=10, output_filename=output_filename)
-        else:
-            print("Using standard processing...")
-            output_csv = decompress_and_aggregate(args.base_dir, args.year, args.month, args.day, 
-                                                 bbox_coords, output_filename)
+        for m, d in periods:
+            label = f"{args.year}" + (f"-{m}" if m else "") + (f"-{d}" if d else "")
+            print(f"\n--- Processing period {label} ---")
+            temp_name = f".tmp_{Path(output_filename).stem}_{m or 'yr'}_{d or 'mo'}.csv"
+            
+            if choice == "2":
+                result = process_in_batches(args.base_dir, args.year, m, d, bbox_coords,
+                                           batch_size=10, output_filename=temp_name)
+            else:
+                result = decompress_and_aggregate(args.base_dir, args.year, m, d, bbox_coords, temp_name)
+            
+            if result:
+                period_frames.append(pd.read_csv(temp_name))
+                os.remove(temp_name)
+    
+    output_csv = combine_period_frames(period_frames, output_filename)
     
     if output_csv:
         # Check file size
@@ -801,7 +952,9 @@ def main():
             cred_flags = f"--username {args.username} --password {args.password} "
             print(f"  python {sys.argv[0]} {cred_flags}--year {args.year}")
             print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month 07")
-            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month {args.month} --day 15")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month 07 --day 15")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month 07 --days 26-28")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --months 07-08")
             print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --output_name my_custom_name")
             print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --in_memory")
         else:
