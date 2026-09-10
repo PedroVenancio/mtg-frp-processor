@@ -387,10 +387,10 @@ def filter_by_bbox(df, bbox_coords):
     """
     lat_min, lon_min, lat_max, lon_max = bbox_coords
     mask = (
-        (df['LATITUDE'] >= lat_min) & 
-        (df['LATITUDE'] <= lat_max) & 
-        (df['LONGITUDE'] >= lon_min) & 
-        (df['LONGITUDE'] <= lon_max)
+        (df['LATITUDE_PARALLAX'] >= lat_min) & 
+        (df['LATITUDE_PARALLAX'] <= lat_max) & 
+        (df['LONGITUDE_PARALLAX'] >= lon_min) & 
+        (df['LONGITUDE_PARALLAX'] <= lon_max)
     )
     return df[mask].copy()
 
@@ -569,7 +569,7 @@ def decompress_and_aggregate(base_dir, year, month=None, day=None, bbox_coords=N
     
     return output_filename
 
-def create_qgis_ready_geopackage(csv_filename, lat_col='LATITUDE', lon_col='LONGITUDE'):
+def create_qgis_ready_geopackage(csv_filename, lat_col='LATITUDE_PARALLAX', lon_col='LONGITUDE_PARALLAX'):
     """
     Convert filtered CSV to GeoPackage for QGIS with proper datetime field
     """
