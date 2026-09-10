@@ -638,8 +638,8 @@ def main():
     parser = argparse.ArgumentParser(description='Download and process MTG/MTFRPPixel data from LSA SAF')
     
     # Required arguments
-    parser.add_argument('--username', required=True, help='LSA SAF username')
-    parser.add_argument('--password', required=True, help='LSA SAF password')
+    parser.add_argument('--username', required=False, help='LSA SAF username (required unless --skip_download is used)')
+    parser.add_argument('--password', required=False, help='LSA SAF password (required unless --skip_download is used)')
     parser.add_argument('--year', required=True, help='Year in YYYY format')
     
     # Optional arguments
@@ -657,6 +657,11 @@ def main():
                        help='Download directly to memory without saving files to disk')
     
     args = parser.parse_args()
+    
+    # Credentials are only required when a download will actually happen.
+    # --skip_download explicitly reuses existing data, so no credentials needed.
+    if not args.skip_download and (not args.username or not args.password):
+        parser.error("--username and --password are required unless --skip_download is used.")
     
     try:
         year_int = int(args.year)
@@ -792,11 +797,15 @@ def main():
         
         # Show usage examples
         print("\nUsage examples for next time:")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year}")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month 07")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --month {args.month} --day 15")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --output_name my_custom_name")
-        print(f"  python {sys.argv[0]} --username {args.username} --password {args.password} --year {args.year} --in_memory")
+        if args.username and args.password:
+            cred_flags = f"--username {args.username} --password {args.password} "
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year}")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month 07")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --month {args.month} --day 15")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --output_name my_custom_name")
+            print(f"  python {sys.argv[0]} {cred_flags}--year {args.year} --in_memory")
+        else:
+            print(f"  python {sys.argv[0]} --skip_download --year {args.year}  # reuse existing data, no credentials needed")
 
 if __name__ == "__main__":
     main()
