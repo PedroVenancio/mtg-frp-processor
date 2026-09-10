@@ -332,6 +332,15 @@ def process_in_memory(year, month=None, day=None, username=None, password=None,
                         minute_file = timestamp_str[10:12]
                         df_filtered.loc[:, 'acquisition_date'] = f"{year_file}-{month_file}-{day_file}"
                         
+                        # acquisition_slot_time: the nominal 10-minute slot (from the filename),
+                        # as a real datetime, distinct from acquisition_datetime below (the
+                        # actual ACQTIME within the file, which can differ by a few minutes).
+                        slot_datetime = datetime(
+                            int(year_file), int(month_file), int(day_file),
+                            int(hour_file), int(minute_file)
+                        )
+                        df_filtered.loc[:, 'acquisition_slot_time'] = slot_datetime
+                        
                         # Create acquisition_datetime from components
                         acq_datetime = datetime(
                             int(year_file), int(month_file), int(day_file),
@@ -341,6 +350,7 @@ def process_in_memory(year, month=None, day=None, username=None, password=None,
                 except Exception as e:
                     print(f"Warning: Could not parse date from filename {url}: {e}")
                     df_filtered.loc[:, 'acquisition_date'] = f"{year}-{month or '01'}-{day or '01'}"
+                    df_filtered.loc[:, 'acquisition_slot_time'] = None
                 
                 all_dataframes.append(df_filtered)
                 processed_count += 1
@@ -445,8 +455,26 @@ def process_single_file(gz_file, bbox_coords):
             if not df_filtered.empty:
                 # Use .loc to avoid SettingWithCopyWarning
                 df_filtered = df_filtered.copy()
-                df_filtered.loc[:, 'source_file'] = os.path.basename(gz_file)
+                filename = os.path.basename(gz_file)
+                df_filtered.loc[:, 'source_file'] = filename
                 df_filtered.loc[:, 'acquisition_date'] = f"{year}-{month}-{day}"
+                
+                # Extract the exact acquisition slot (YYYYMMDDHHMM) from the filename itself,
+                # e.g. LSA-509_MTG_MTFRPPIXEL-ListProduct_MTG-FD_202607281330.csv.gz -> 202607281330
+                # Stored as a real datetime, distinct from acquisition_datetime below (the
+                # actual ACQTIME within the file, which can differ by a few minutes).
+                try:
+                    timestamp_str = filename.split('_')[-1].split('.')[0]
+                    if len(timestamp_str) == 12 and timestamp_str.isdigit():
+                        slot_datetime = datetime(
+                            int(timestamp_str[:4]), int(timestamp_str[4:6]), int(timestamp_str[6:8]),
+                            int(timestamp_str[8:10]), int(timestamp_str[10:12])
+                        )
+                        df_filtered.loc[:, 'acquisition_slot_time'] = slot_datetime
+                    else:
+                        df_filtered.loc[:, 'acquisition_slot_time'] = None
+                except Exception:
+                    df_filtered.loc[:, 'acquisition_slot_time'] = None
                 
                 # Convert ACQTIME to proper datetime
                 if 'ACQTIME' in df_filtered.columns:
@@ -583,6 +611,8 @@ def create_qgis_ready_geopackage(csv_filename, lat_col='LATITUDE_PARALLAX', lon_
         # Convert acquisition_datetime string back to datetime object
         if 'acquisition_datetime' in df.columns:
             df['acquisition_datetime'] = pd.to_datetime(df['acquisition_datetime'])
+        if 'acquisition_slot_time' in df.columns:
+            df['acquisition_slot_time'] = pd.to_datetime(df['acquisition_slot_time'])
         
         print("Creating geometries...")
         geometry = [Point(xy) for xy in zip(df[lon_col], df[lat_col])]
