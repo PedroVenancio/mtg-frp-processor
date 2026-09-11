@@ -13,8 +13,8 @@ This script automates the workflow with MTFRPPixel (Fire Radiative Power) data f
 
 - **Cross-Platform Download**: Downloads data using requests library (works on Windows, macOS, Linux)
 - **In-Memory Processing**: Optional direct download to memory without saving intermediate files
-- **Temporal Flexibility**: Support for specific year, month, or day (flexible formatting: 8 or 08)
-- **Spatial Filtering**: Applies custom bounding box to reduce data volume
+- **Temporal Flexibility**: Support for a specific year, month, or day, as well as ranges/lists of months (`--months 07-08`) or days (`--days 26-28`, `--days 26,27,31`) — flexible formatting (8 or 08)
+- **Spatial Filtering**: Applies custom bounding box (using parallax-corrected coordinates) to reduce data volume
 - **Efficient Processing**: Two modes (fast or low RAM usage)
 - **QGIS Conversion**: Generates CSV and GeoPackage with spatial geometries
 - **Memory Management**: Batch processing for large datasets
@@ -60,6 +60,20 @@ python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year
 python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --month 08 --day 05
 ```
 
+**Download a range or list of days within a single month:**
+```bash
+python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --month 07 --days 26-28
+# or a non-contiguous list
+python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --month 07 --days 26,27,31
+```
+
+**Download a range or list of months:**
+```bash
+python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --months 07-08
+# or
+python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --months 07,08,12
+```
+
 ### Advanced Examples
 
 **In-memory processing:**
@@ -77,9 +91,9 @@ python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year
 python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --output_name portugal_fires
 ```
 
-**Reprocess existing data:**
+**Reprocess existing data (no credentials needed):**
 ```bash
-python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --skip_download
+python mtg_frp_processor.py --year 2025 --skip_download
 ```
 
 **CSV only (no GeoPackage):**
@@ -91,22 +105,25 @@ python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year
 ```bash
 # Downloads both months to same directory, then processes entire year
 python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year 2025 --base_dir my_data --skip_download
+# Or simply use --months to do this in one command (see Advanced Examples above)
 ```
 
 ## 📊 Parameters
 
 ### Required Parameters
-- `--username`: LSA SAF username
-- `--password`: LSA SAF password  
+- `--username`: LSA SAF username (required unless `--skip_download` is used)
+- `--password`: LSA SAF password (required unless `--skip_download` is used)
 - `--year`: Year in YYYY format (must be ≥2025)
 
 ### Optional Parameters
-- `--month`: Month in MM format (1-12 or 01-12)
-- `--day`: Day in DD format (1-31 or 01-31)
+- `--month`: Single month in MM format (1-12 or 01-12)
+- `--months`: Multiple months as a range (e.g. `07-08`) or list (e.g. `07,08,12`). Cannot be combined with `--month`
+- `--day`: Single day in DD format (1-31 or 01-31)
+- `--days`: Multiple days as a range (e.g. `26-28`) or list (e.g. `26,27,31`). Requires exactly one month (via `--month` or a single-value `--months`). Cannot be combined with `--day`
 - `--base_dir`: Download directory (default: "FRP_MTG")
 - `--bbox`: Bounding box "lat_min,lon_min,lat_max,lon_max" (default: Portugal)
 - `--output_name`: Base name for output files
-- `--skip_download`: Skip download, use existing data
+- `--skip_download`: Skip download, use existing data (no credentials needed)
 - `--skip_geopackage`: Don't create GeoPackage, only CSV
 - `--in_memory`: Download directly to memory (no temporary files)
 
@@ -120,8 +137,11 @@ python mtg_frp_processor.py --username YOUR_USER --password YOUR_PASSWORD --year
 Files contain all original columns plus:
 - `source_file`: Source file
 - `acquisition_date`: Acquisition date
-- `acquisition_datetime`: Acquisition datetime (converted from ACQTIME)
+- `acquisition_slot_time`: Nominal acquisition slot (datetime), extracted from the filename timestamp (`YYYYMMDDHHMM`); MTG scans every 10 minutes, so this is one of 144 fixed slots per day
+- `acquisition_datetime`: Actual acquisition datetime (converted from ACQTIME); can differ from `acquisition_slot_time` by a few minutes/seconds
 - Spatial geometry (only in GeoPackage)
+
+**Note on coordinates:** spatial filtering (bounding box) and the GeoPackage geometry both use the parallax-corrected coordinates (`LATITUDE_PARALLAX`, `LONGITUDE_PARALLAX`) rather than the raw `LATITUDE`/`LONGITUDE` fields, which account for the fire pixel's actual ground position after correcting for MTG's viewing angle. Both the raw and parallax-corrected columns are still kept in the output.
 
 ## 🔧 Processing
 
@@ -133,9 +153,13 @@ Files contain all original columns plus:
 
 ### Applied Filters
 
-- **Spatial Filter**: Only data within bounding box
+- **Spatial Filter**: Only data within bounding box (using parallax-corrected coordinates)
 - **Temporal Filter**: Data from specified period
 - **Validation**: Data integrity verification and date normalization
+
+### Multiple Periods (`--months`/`--days`)
+
+When a range or list is given, each resulting month/day is downloaded and processed as its own period, then combined into a single output CSV/GeoPackage. As a safety net, exact-duplicate records (same source file, acquisition time, and coordinates) picked up across periods are automatically removed before saving.
 
 ## 💡 Usage Tips
 
@@ -181,20 +205,26 @@ python mtg_frp_processor.py --username USER --password PASS --year 2025 --month 
 ```
 
 ### Processing Multiple Periods
+The simplest way is to use `--months`/`--days` directly (see Advanced Examples above), which downloads and combines the periods automatically:
+```bash
+python mtg_frp_processor.py --username USER --password PASS --year 2025 --months 07-08
+```
+
+Alternatively, you can still download months separately into the same base directory and process them together afterwards:
 ```bash
 # Download months separately to same base directory
 python mtg_frp_processor.py --username USER --password PASS --year 2025 --month 7 --base_dir my_data
 python mtg_frp_processor.py --username USER --password PASS --year 2025 --month 8 --base_dir my_data
 
 # Then process entire year together
-python mtg_frp_processor.py --username USER --password PASS --year 2025 --base_dir my_data --skip_download
+python mtg_frp_processor.py --year 2025 --base_dir my_data --skip_download
 ```
 
 ### QGIS Integration
 1. **GeoPackage**: Open directly as vector layer
 2. **CSV**: Import as delimited text layer
-   - X field: LONGITUDE
-   - Y field: LATITUDE  
+   - X field: LONGITUDE_PARALLAX
+   - Y field: LATITUDE_PARALLAX
    - CRS: EPSG:4326
 
 ## 🐛 Troubleshooting
@@ -238,7 +268,7 @@ python mtg_frp_processor.py --username user --password pass --year 2025 --month 
 # FRP > 10 for significant fires
 
 # 4. Process multiple months together
-python mtg_frp_processor.py --username user --password pass --year 2025 --base_dir annual_data --skip_download --output_name summer_2025
+python mtg_frp_processor.py --year 2025 --base_dir annual_data --skip_download --output_name summer_2025
 ```
 
 ## 🔒 Security
